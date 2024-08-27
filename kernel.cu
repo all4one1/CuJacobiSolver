@@ -1,121 +1,249 @@
-﻿
-#include "cuda_runtime.h"
+﻿#include "cuda_runtime.h"
 #include "device_launch_parameters.h"
-
+#include <cuda.h>
 #include <stdio.h>
+#include <iostream>
+#include <iomanip>
+#include <vector>
 
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
+using namespace std;
 
-__global__ void addKernel(int *c, const int *a, const int *b)
+#pragma once
+#include <iostream>
+#include <iomanip>
+#include <fstream>
+
+
+#include "CudaReduction/CuReduction.h"
+
+using std::cout;
+using std::endl;
+using std::ofstream;
+
+struct CudaLaunchSetup
 {
-    int i = threadIdx.x;
-    c[i] = a[i] + b[i];
+	dim3 Grid3D, Block3D, Grid1D, Block1D;
+	unsigned int thread_x = 8, thread_y = 8, thread_z = 8, thread_1D = 1024;
+
+	CudaLaunchSetup(unsigned int N, unsigned int nx = 1, unsigned int ny = 1, unsigned nz = 1)
+	{
+		Grid3D = dim3(
+			(unsigned int)ceil((nx + 1.0) / thread_x),
+			(unsigned int)ceil((ny + 1.0) / thread_y),
+			(unsigned int)ceil((nz + 1.0) / thread_z));
+		Block3D = dim3(thread_x, thread_y, thread_z);
+
+		Grid1D = dim3((unsigned int)ceil((N + 0.0) / thread_1D));
+		Block1D = thread_1D;
+
+	};
+};
+
+struct SparseMatrixCuda
+{
+	/*		Compressed Sparse Row	 */
+
+	int Nfull = 0;	// the input (linear) size of a matrix
+	int nval = 0;	// number of non-zero elements
+	int nrow = 0;	// number of rows
+	size_t bytesVal = 0;
+	size_t bytesCol = 0;
+	size_t bytesRow = 0;
+	double* val = nullptr;
+	int* col = nullptr;
+	int* row = nullptr;
+
+	SparseMatrixCuda() {};
+	SparseMatrixCuda(int N, int nv, int nr, double* v, int* c, int* r) : Nfull(N), nval(nv), nrow(nr)
+	{
+		bytesVal = nval * sizeof(double);
+		bytesCol = nval * sizeof(int);
+		bytesRow = nrow * sizeof(int);
+
+		cudaMalloc((void**)&val, sizeof(double) * nval);
+		cudaMalloc((void**)&col, sizeof(int) * nval);
+		cudaMalloc((void**)&row, sizeof(int) * nrow);
+
+		cudaMemcpy(val, v, bytesVal, cudaMemcpyHostToDevice);
+		cudaMemcpy(col, c, bytesCol, cudaMemcpyHostToDevice);
+		cudaMemcpy(row, r, bytesRow, cudaMemcpyHostToDevice);
+	}
+	~SparseMatrixCuda() {};
+};
+
+__global__ void swap_one(double* f_old, double* f_new, unsigned int N)
+{
+	unsigned int l = blockIdx.x * blockDim.x + threadIdx.x;
+	if (l < N)	f_old[l] = f_new[l];
 }
+__global__ void solveJacobiCuda(double* f, double* f0, double* b, int N, SparseMatrixCuda M)
+{
+	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+	__shared__ double s, diag;
+
+	if (i < N)
+	{
+		s = 0;
+		diag = 0;
+		for (int j = M.row[i]; j < M.row[i + 1]; j++)
+		{
+			s += M.val[j] * f0[M.col[j]];
+			if (M.col[j] == i) diag = M.val[j]; //?
+		}
+		f[i] = f0[i] + (b[i] - s) / diag;
+	}
+}
+
+
+struct CudaIterSolver
+{
+	int k = 0, write_i = 0, limit = 1000;
+	double eps_iter = 1e-6;
+	double res, res0, eps;
+	ofstream w;
+	CudaReduction CR;
+
+	CudaIterSolver() {};
+	CudaIterSolver(unsigned int N)
+	{
+		CR = CudaReduction(N, 1024);
+	}
+
+
+	void solveJacobi(double* f, double* f0, double* b, int N, SparseMatrixCuda& M, CudaLaunchSetup kernel)
+	{
+		CudaReduction CR(N, 1024);
+		k = 0;
+		eps = 1.0;
+		res = 0.0;
+		res0 = 0.0;
+
+		for (k = 0; k < 200; k++)
+		{
+			solveJacobiCuda << < kernel.Grid1D, kernel.Block1D >> > (f, f0, b, N, M);
+
+			res = CR.reduce(f);
+			//res = R.reduce();
+			eps = abs(res - res0);
+			res0 = res;
+
+			swap_one << < kernel.Grid1D, kernel.Block1D >> > (f0, f, N);
+
+			if (eps < eps_iter * res0) break;
+		}
+	}
+
+	void auto_test()
+	{
+		//double A[6][6] =
+		//{
+		//	{ 30,3,4,0,0,0 },
+		//	{ 4,22,1,3,0,0 },
+		//	{ 5,7,33,6,7,0 },
+		//	{ 0,1,2,42,3,3 },
+		//	{ 0,0,2,11,52,2 },
+		//	{ 0,0,0,3,9,26 },
+		//};
+
+		int nval = 24;
+		int n = 6;
+		double val[24] = { 30, 3, 4, 4, 22, 1, 3, 5, 7, 33, 6, 7, 1, 2, 42, 3, 3, 2, 11, 52, 2, 3, 9, 26 };
+		int col[24] = { 0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 4, 1, 2, 3, 4, 5, 2, 3, 4, 5, 3, 4, 5 };
+		int row[7] = { 0, 3, 7, 12, 17, 21, 24 };
+
+		SparseMatrixCuda SMC(n, nval, n + 1, val, col, row);
+
+		double fh[6] = { 0, 0, 0, 0, 0, 0 };
+		double* d, * d0, * b;
+		cudaMalloc((void**)&d, sizeof(double) * n);
+		cudaMalloc((void**)&d0, sizeof(double) * n);
+		cudaMalloc((void**)&b, sizeof(double) * n);
+
+		cudaMemcpy(d0, fh, sizeof(double) * n, cudaMemcpyHostToDevice);
+		double bh[6] = { 1, 2, 3, 3, 2, 1 };
+		cudaMemcpy(b, bh, sizeof(double) * n, cudaMemcpyHostToDevice);
+
+		CudaLaunchSetup kernel(6);
+		solveJacobi(d, d0, b, n, SMC, kernel);
+		cudaMemcpy(fh, d, sizeof(double) * n, cudaMemcpyDeviceToHost);
+
+		cout << "cuda test:   ";
+		for (int i = 0; i < n; i++)
+		{
+			cout << fh[i] << " ";
+		} cout << endl;
+
+		double cg[6] =
+		{ 0.1826929218e-1,
+		0.7636750835e-1,
+		0.5570467736e-1,
+		0.6371099009e-1,
+		0.2193724104e-1,
+		0.2351661001e-1 };
+		cout << "x should be: ";
+		for (int i = 0; i < n; i++)
+			cout << cg[i] << " ";
+		cout << endl;
+
+
+		cudaFree(d);
+		cudaFree(d0);
+		cudaFree(b);
+	}
+
+
+};
+
+
+
 
 int main()
 {
-    const int arraySize = 5;
-    const int a[arraySize] = { 1, 2, 3, 4, 5 };
-    const int b[arraySize] = { 10, 20, 30, 40, 50 };
-    int c[arraySize] = { 0 };
 
-    // Add vectors in parallel.
-    cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addWithCuda failed!");
-        return 1;
-    }
 
-    printf("{1,2,3,4,5} + {10,20,30,40,50} = {%d,%d,%d,%d,%d}\n",
-        c[0], c[1], c[2], c[3], c[4]);
+	CudaIterSolver CUsolver;
+	//CUsolver.auto_test();
 
-    // cudaDeviceReset must be called before exiting in order for profiling and
-    // tracing tools such as Nsight and Visual Profiler to show complete traces.
-    cudaStatus = cudaDeviceReset();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceReset failed!");
-        return 1;
-    }
 
-    return 0;
+	int N = 6;
+	double* fh;
+
+	fh = new double[N];
+
+	for (int i = 0; i < N; i++)
+	{
+		fh[i] = 0;
+	}
+	double* d, * d0, * b;
+	cudaMalloc((void**)&d, sizeof(double) * N);
+	cudaMalloc((void**)&d0, sizeof(double) * N);
+	cudaMalloc((void**)&b, sizeof(double) * N);
+
+	//cudaMemcpy(d, fh, sizeof(double) * N, cudaMemcpyHostToDevice);
+	cudaMemcpy(d0, fh, sizeof(double) * N, cudaMemcpyHostToDevice);
+
+	double bh[6] = { 1, 2, 3, 3, 2, 1 };
+	cudaMemcpy(b, bh, sizeof(double) * N, cudaMemcpyHostToDevice);
+
+
+	//SparseMatrixCuda SMC(SM.Nfull, SM.nval, SM.nraw, SM.val.data(), SM.col.data(), SM.raw.data());
+
+
+
+
+
+
+
+
+	cudaMemcpy(fh, d, sizeof(double) * N, cudaMemcpyDeviceToHost);
+
+
+
+
+
+	//	solver.auto_test();
+
+	return 0;
 }
 
-// Helper function for using CUDA to add vectors in parallel.
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size)
-{
-    int *dev_a = 0;
-    int *dev_b = 0;
-    int *dev_c = 0;
-    cudaError_t cudaStatus;
 
-    // Choose which GPU to run on, change this on a multi-GPU system.
-    cudaStatus = cudaSetDevice(0);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-        goto Error;
-    }
-
-    // Allocate GPU buffers for three vectors (two input, one output)    .
-    cudaStatus = cudaMalloc((void**)&dev_c, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_a, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_b, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_a, a, size * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMemcpy(dev_b, b, size * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-    // Launch a kernel on the GPU with one thread for each element.
-    addKernel<<<1, size>>>(dev_c, dev_a, dev_b);
-
-    // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-        goto Error;
-    }
-    
-    // cudaDeviceSynchronize waits for the kernel to finish, and returns
-    // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
-        goto Error;
-    }
-
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(c, dev_c, size * sizeof(int), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-Error:
-    cudaFree(dev_c);
-    cudaFree(dev_a);
-    cudaFree(dev_b);
-    
-    return cudaStatus;
-}
