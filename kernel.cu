@@ -123,7 +123,7 @@ struct CudaIterSolver
 			solveJacobiCuda << < kernel.Grid1D, kernel.Block1D >> > (f, f0, b, N, M);
 
 			res = CR.reduce(f);
-			//res = R.reduce();
+			//res = CR.reduce();
 			eps = abs(res - res0);
 			res0 = res;
 
@@ -202,7 +202,7 @@ int main()
 
 
 	CudaIterSolver CUsolver;
-	//CUsolver.auto_test();
+	CUsolver.auto_test();
 
 
 	int N = 6;
