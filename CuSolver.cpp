@@ -111,7 +111,7 @@ void CudaIterSolver::solveJacobi(double* f, double* f0, double* b, int N, Sparse
 	res = 0.0;
 	res0 = 0.0;
 
-	for (k = 0; k < 200; k++)
+	for (k = 0; k < k_limit; k++)
 	{
 		solveJacobiCuda << < kernel.Grid1D, kernel.Block1D >> > (f, f0, b, N, M);
 

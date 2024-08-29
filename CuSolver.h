@@ -69,7 +69,7 @@ struct SparseMatrixCuda
 
 struct CudaIterSolver
 {
-	int k = 0, write_i = 0, limit = 1000;
+	int k = 0, write_i = 0, k_limit = 1000;
 	double eps_iter = 1e-6;
 	double res = 0, res0 = 0, eps = 0;
 	CudaReduction CR;
