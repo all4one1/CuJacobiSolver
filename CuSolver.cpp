@@ -54,7 +54,7 @@ void CudaIterSolver::auto_test()
 	int col[24] = { 0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 4, 1, 2, 3, 4, 5, 2, 3, 4, 5, 3, 4, 5 };
 	int row[7] = { 0, 3, 7, 12, 17, 21, 24 };
 
-	SparseMatrixCuda SMC(n, nval, n + 1, val, col, row);
+	SparseMatrixCuda SMC(n, nval, val, col, row);
 
 
 	double fh[6] = { 0, 0, 0, 0, 0, 0 };

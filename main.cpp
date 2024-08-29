@@ -1,20 +1,4 @@
-﻿#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
-#include <cuda.h>
-#include <stdio.h>
-#include <iostream>
-#include <iomanip>
-#include <vector>
-
-using namespace std;
-
-#pragma once
-#include <iostream>
-#include <iomanip>
-#include <fstream>
-
-
-#include "CuSolver.h"
+﻿#include "CuSolver.h"
 
 
 
@@ -23,19 +7,24 @@ int main()
 	CudaIterSolver CUsolver;
 	CUsolver.auto_test();
 
+	// usage: 
 
-	////SparseMatrixCuda SMC(SM.Nfull, SM.nval, SM.nraw, SM.val.data(), SM.col.data(), SM.raw.data());
+	// rank of a square matrix 
+	int n = 6; 
+	// number of non-zero elements of a matrix
+	int nval = 24;
 
-	int N = 100;
-	size_t Nbytes = sizeof(double) * N;
-	double* f_host = new double[N];
-	memset(f_host, 0, Nbytes);
+	// Example of a sparse matrix
+	double sparse_matrix_elements[24] = { 30, 3, 4, 4, 22, 1, 3, 5, 7, 33, 6, 7, 1, 2, 42, 3, 3, 2, 11, 52, 2, 3, 9, 26 };
+	int column[24] = { 0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 4, 1, 2, 3, 4, 5, 2, 3, 4, 5, 3, 4, 5 };
+	int row[7] = { 0, 3, 7, 12, 17, 21, 24 };
+	
 
-	double* f_dev, * f0_dev;
+	SparseMatrixCuda SMC(n, nval, sparse_matrix_elements, column, row);
+	CudaLaunchSetup kernel_settings(n);
 
-
-	//cudaMemcpy(fh, d, sizeof(double) * N, cudaMemcpyDeviceToHost);
-	//	solver.auto_test();
+	// double* f_dev, * f0_dev, * rhs_dev;
+	// CUsolver.solveJacobi(f_dev, f0_dev, rhs_dev, n, SMC, kernel_settings);
 
 	return 0;
 }

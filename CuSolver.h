@@ -47,8 +47,9 @@ struct SparseMatrixCuda
 	int* row = nullptr;
 
 	SparseMatrixCuda() {};
-	SparseMatrixCuda(int N, int nv, int nr, double* v, int* c, int* r) : Nfull(N), nval(nv), nrow(nr)
+	SparseMatrixCuda(int N, int nv, double* v, int* c, int* r) : Nfull(N), nval(nv)
 	{
+		nrow = N + 1;
 		bytesVal = nval * sizeof(double);
 		bytesCol = nval * sizeof(int);
 		bytesRow = nrow * sizeof(int);
