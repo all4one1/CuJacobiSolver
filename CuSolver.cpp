@@ -5,11 +5,12 @@ __global__ void swap_one(double* f_old, double* f_new, unsigned int N)
 	unsigned int l = blockIdx.x * blockDim.x + threadIdx.x;
 	if (l < N)	f_old[l] = f_new[l];
 }
-__global__ void solveJacobiCuda(double* f, double* f0, double* b, int N, SparseMatrixCuda M)
+__global__ void kernelSolveJacobi(double* f, double* f0, double* b, int N, SparseMatrixCuda M)
 {
 	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
 	double s, diag;
 
+	//double w = 2.0 / 3.0;
 	if (i < N)
 	{
 		s = 0;
@@ -21,6 +22,7 @@ __global__ void solveJacobiCuda(double* f, double* f0, double* b, int N, SparseM
 		}
 
 		f[i] = f0[i] + (b[i] - s) / diag;
+		//f[i] = f0[i] + (b[i] - s) / diag * w;
 	}
 }
 
@@ -113,16 +115,64 @@ void CudaIterSolver::solveJacobi(double* f, double* f0, double* b, int N, Sparse
 
 	for (k = 0; k < k_limit; k++)
 	{
-		solveJacobiCuda << < kernel.Grid1D, kernel.Block1D >> > (f, f0, b, N, M);
-
-		//res = CR.reduce(f);
+		kernelSolveJacobi << < kernel.Grid1D, kernel.Block1D >> > (f, f0, b, N, M);
 		res = CR.reduce();
-		eps = abs(res - res0);
+		eps = abs(res - res0) / res0;
 		res0 = res;
 
 		swap_one << < kernel.Grid1D, kernel.Block1D >> > (f0, f, N);
 
-		if (eps < eps_iter * res0) break;
+		if (eps < eps_iter) break;
+		if (k % 10000 == 0) cout << "device k = " << k << ", eps = " << eps << endl;
 	}
+	cout << "device k = " << k << ", eps = " << eps << endl;
 
+}
+
+void CudaIterSolver::solveJacobi_experimental(double* f, double* f0, double* b, int N, SparseMatrixCuda& M, CudaLaunchSetup kernel, 
+	int k_minimal_threshold, int k_frequency)
+{
+	CudaReduction CR(f, N, 1024);
+	k = 0;
+	eps = 1.0;
+	res = 0.0;
+	res0 = 0.0;
+
+	for (k = 0; k < k_limit; k++)
+	{
+		if (k % 10000 == 0) cout << "device k = " << k << ", eps = " << eps << endl;
+		if (k < k_minimal_threshold)
+		{
+			kernelSolveJacobi << < kernel.Grid1D, kernel.Block1D >> > (f, f0, b, N, M);
+			swap_one << < kernel.Grid1D, kernel.Block1D >> > (f0, f, N);
+
+			res = CR.reduce();
+			eps = abs(res - res0) / res0;
+			res0 = res;
+
+			if (eps < eps_iter)		break;
+		}
+		else
+		{
+			kernelSolveJacobi << < kernel.Grid1D, kernel.Block1D >> > (f, f0, b, N, M);
+			swap_one << < kernel.Grid1D, kernel.Block1D >> > (f0, f, N);
+
+			if (k % k_frequency == 0)
+			{
+				res0 = CR.reduce();
+
+				kernelSolveJacobi << < kernel.Grid1D, kernel.Block1D >> > (f, f0, b, N, M);
+				swap_one << < kernel.Grid1D, kernel.Block1D >> > (f0, f, N);
+				k++;
+				res = CR.reduce();
+
+				eps = abs(res - res0) / res0;
+
+				if (eps < eps_iter)		break; 
+			}
+		}
+
+
+	}
+	cout << "device k = " << k << ", eps = " << eps << endl;
 }
